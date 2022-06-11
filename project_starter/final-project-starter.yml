@@ -1,8 +1,52 @@
+Description: >
+    Chris Aguilar / Lockheed Martin
+    This template deploys a VPC, with a single public and two private subnets spread 
+    inside of a single Availabilty Zone. It deploys an Internet Gateway, with a default 
+    route on the public subnets. It deploys a pair of NAT Gateways (one in each AZ), 
+    and default routes for them in the private subnets.
+
+#EXAMPLE script execution
+# ./create.sh ourdemo2 ./NetInfraChallenge2.yml ./NetInfraCh2-parameters.json
+# ./update.sh ourdemo2 ./ourinfra.yml ourinfra-parameters.json
+
+
 Parameters:
   # Paramenters are entirely optional.
   # but using them will make your cloudformation templates more reusable
   # use them for things that may change over time, such as instance type,
   # VPCs and so on.
+
+  EnvironmentName:
+    Description: An envirnoment name that will be prefixed to resource names
+    Type: String
+
+  VpcCIDR:
+    Description: Pease enter the IP range (CIDR notation) for this VPC
+    Type: String
+    Default: 10.0.0.0/16
+
+  PublicSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the Availability Zone
+    Type: String
+    Default: 10.0.0.0/24
+
+  PublicSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the Availability Zone
+    Type: String
+    Default: 10.0.1.0/24
+
+  PrivateSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the first private subnet in the Availability Zone
+    Type: String
+    Default: 10.0.2.0/24
+
+  PrivateSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the second private subnet in the Availability Zone
+    Type: String
+    Default: 10.0.3.0/24
+
+
+
 Resources:
   # instace profile contains the IAM Role name(s) that we want to associate to our auto scaling EC2 Servers
   # never give too much permissions to your EC2 instances! if they get hacked, the permissions get hacked also!
@@ -12,22 +56,364 @@ Resources:
     Properties: 
       Roles:
         - UdacityS3ReadOnlyEC2
-Outputs: 
-  # This is also optional.
-  # Bonus points for useful outputs!
-  # for example, if you create a Load Balancer
-  # it's nice to output the URL to it here, so that we don't have to go to the console to get it.
 
-# Sample UserData
-# When creating your Launch Configuration, you may need a UserData script
-# here's one that you can use for Ubuntu Linux that will:
-# Install Apache Web Server, Start it, and create an index.html that will be displayed
-# when you visit the IP address of this server with your web browser
-#Here it is:
-#
-#          #!/bin/bash
-#          apt-get update -y
-#          apt-get install apache2 -y
-#          systemctl start apache2.service
-#          cd /var/www/html
-#          echo "Udacity Demo Web Server Up and Running!" > index.html
+  VPC: 
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsHostnames: true
+      Tags:
+        - Key: name
+          Value: !Ref EnvironmentName
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+        Tags:
+            - Key: Name
+              Value: !Ref EnvironmentName
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+        InternetGatewayId: !Ref InternetGateway
+        VpcId: !Ref VPC
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Public Subnet (AZ1)
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet2CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Public Subnet (AZ2)
+
+
+  # PrivateSubnet1: 
+  #   Type: AWS::EC2::Subnet
+  #   Properties:
+  #       VpcId: !Ref VPC
+  #       AvailabilityZone: !Select [ 0, !GetAZs '' ]
+  #       CidrBlock: !Ref PrivateSubnet1CIDR
+  #       MapPublicIpOnLaunch: false
+  #       Tags: 
+  #           - Key: Name 
+  #             Value: !Sub ${EnvironmentName} Private Subnet (AZ1)
+
+  # PrivateSubnet2: 
+  #   Type: AWS::EC2::Subnet
+  #   Properties:
+  #       VpcId: !Ref VPC
+  #       AvailabilityZone: !Select [ 1, !GetAZs '' ]
+  #       CidrBlock: !Ref PrivateSubnet2CIDR
+  #       MapPublicIpOnLaunch: false
+  #       Tags: 
+  #           - Key: Name 
+  #             Value: !Sub ${EnvironmentName} Private Subnet (AZ2)
+
+  NatGateway1EIP:
+      Type: AWS::EC2::EIP
+      DependsOn: InternetGatewayAttachment
+      Properties: 
+          Domain: VPC
+
+  NatGateway1: 
+      Type: AWS::EC2::NatGateway
+      Properties: 
+          AllocationId: !GetAtt NatGateway1EIP.AllocationId
+          SubnetId: !Ref PublicSubnet1
+
+  NatGateway2EIP:
+      Type: AWS::EC2::EIP
+      DependsOn: InternetGatewayAttachment
+      Properties: 
+          Domain: VPC
+
+  NatGateway2: 
+      Type: AWS::EC2::NatGateway
+      Properties: 
+          AllocationId: !GetAtt NatGateway2EIP.AllocationId
+          SubnetId: !Ref PublicSubnet2
+
+# PUBLIC ROUTE TABLE #1
+  PublicRouteTable1:
+      Type: AWS::EC2::RouteTable
+      Properties: 
+          VpcId: !Ref VPC
+          Tags: 
+              - Key: Name 
+                Value: !Sub ${EnvironmentName} Public Routes
+
+  DefaultPublicRoute1: 
+      Type: AWS::EC2::Route
+      DependsOn: InternetGatewayAttachment
+      Properties: 
+          RouteTableId: !Ref PublicRouteTable1
+          DestinationCidrBlock: 0.0.0.0/0
+          GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+          RouteTableId: !Ref PublicRouteTable1
+          SubnetId: !Ref PublicSubnet1
+
+# PUBLIC ROUTE TABLE #2
+  PublicRouteTable2:
+      Type: AWS::EC2::RouteTable
+      Properties: 
+          VpcId: !Ref VPC
+          Tags: 
+              - Key: Name 
+                Value: !Sub ${EnvironmentName} Public Routes
+
+  DefaultPublicRoute2: 
+      Type: AWS::EC2::Route
+      DependsOn: InternetGatewayAttachment
+      Properties: 
+          RouteTableId: !Ref PublicRouteTable2
+          DestinationCidrBlock: 0.0.0.0/0
+          GatewayId: !Ref InternetGateway
+
+  PublicSubnet2RouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+          RouteTableId: !Ref PublicRouteTable2
+          SubnetId: !Ref PublicSubnet2
+
+
+# # PRIVATE ROUTE TABLE #1
+#   PrivateRouteTable1:
+#       Type: AWS::EC2::RouteTable
+#       Properties: 
+#           VpcId: !Ref VPC
+#           Tags: 
+#               - Key: Name 
+#                 Value: !Sub ${EnvironmentName} Private Routes (AZ1)
+
+#   DefaultPrivateRoute1:
+#       Type: AWS::EC2::Route
+#       Properties:
+#           RouteTableId: !Ref PrivateRouteTable1
+#           DestinationCidrBlock: 0.0.0.0/0
+#           NatGatewayId: !Ref NatGateway1
+
+#   PrivateSubnet1RouteTableAssociation:
+#       Type: AWS::EC2::SubnetRouteTableAssociation
+#       Properties:
+#           RouteTableId: !Ref PrivateRouteTable1
+#           SubnetId: !Ref PrivateSubnet1
+
+# # PRIVATE ROUTE #2
+#   PrivateRouteTable2:
+#       Type: AWS::EC2::RouteTable
+#       Properties: 
+#           VpcId: !Ref VPC
+#           Tags: 
+#               - Key: Name 
+#                 Value: !Sub ${EnvironmentName} Private Routes (AZ2)
+#   DefaultPrivateRoute2:
+#       Type: AWS::EC2::Route
+#       Properties:
+#           RouteTableId: !Ref PrivateRouteTable2
+#           DestinationCidrBlock: 0.0.0.0/0
+#           NatGatewayId: !Ref NatGateway2
+
+#   PrivateSubnet2RouteTableAssociation:
+#       Type: AWS::EC2::SubnetRouteTableAssociation
+#       Properties:
+#           RouteTableId: !Ref PrivateRouteTable2
+#           SubnetId: !Ref PrivateSubnet2
+
+#Security Groups
+
+  LoadBalancerSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+          GroupDescription: Allow http to our load balancer
+          VpcId: !Ref VPC
+          SecurityGroupIngress:
+            # - IpProtocol: tcp
+            #   FromPort: 80
+            #   ToPort: 80
+            #   CidrIp: 0.0.0.0/0
+            # - IpProtocol: tcp
+            #   FromPort: 22
+            #   ToPort: 22
+            #   CidrIp: 0.0.0.0/0
+            # Allow access from anywhere to our ECS services
+            - CidrIp: 0.0.0.0/0
+              IpProtocol: -1
+          SecurityGroupEgress:
+            # - IpProtocol: tcp
+            #   FromPort: 80
+            #   ToPort: 80
+            #   CidrIp: 0.0.0.0/0
+            # Allow access from anywhere to our ECS services
+            - CidrIp: 0.0.0.0/0
+              IpProtocol: -1
+
+  WebServerSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: Allow http to our hosts and SSH from local only
+        VpcId: !Ref VPC
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: 80
+            ToPort: 80
+            CidrIp: 0.0.0.0/0
+          - IpProtocol: tcp
+            FromPort: 22
+            ToPort: 22
+            CidrIp: 0.0.0.0/0
+        SecurityGroupEgress:
+          - IpProtocol: tcp
+            FromPort: 0
+            ToPort: 65535
+            CidrIp: 0.0.0.0/0
+
+  # THIS SHOULD BE REMOVED, THIS WAS FOR INITIAL ACCESS TO THE EC2 INSTANCE
+  # LoadBalancerSecurityGroup:
+  #     Type: AWS::EC2::SecurityGroup
+  #     Properties:
+  #         GroupDescription: Allow http to our load balancer
+  #         VpcId: !Ref VPC
+  #         SecurityGroupIngress:
+  #           # Allow access from anywhere to our ECS services
+  #           - CidrIp: 0.0.0.0/0
+  #             IpProtocol: -1
+  # ************************************************************************
+
+  WebAppLaunchConfig:
+      Type: AWS::AutoScaling::LaunchConfiguration
+      Properties:
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            sudo apt-get update -y
+            sudo apt-get install apache2 -y
+            sudo systemctl start apache2.service 
+            cd /var/www/html
+            echo "Udacity Demo Web Server Up and Running!" > index.html         
+        ImageId: ami-09d56f8956ab235b3
+        IamInstanceProfile: !Ref ProfileWithRolesForOurApp
+        SecurityGroups:
+        # - Ref: WebServerSecurityGroup
+          - Ref: LoadBalancerSecurityGroup # <------- SHOULD BE REMOVED
+        InstanceType: t3.medium
+        BlockDeviceMappings:
+        - DeviceName: "/dev/sdk"
+          Ebs:
+            VolumeSize: '10'
+
+  WebAppGroup:
+      Type: AWS::AutoScaling::AutoScalingGroup
+      Properties:
+        VPCZoneIdentifier:
+            - Ref: PublicSubnet1
+            - Ref: PublicSubnet2
+          # - Ref: PrivateSubnet1 
+          # - Ref: PrivateSubnet2
+        LaunchConfigurationName:
+          Ref: WebAppLaunchConfig
+        MinSize: '2'
+        MaxSize: '4'
+
+  WebAppLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+        - Ref: PublicSubnet1
+        - Ref: PublicSubnet2
+      SecurityGroups:
+      - Ref: LoadBalancerSecurityGroup
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn:
+          Ref: WebAppTargetGroup
+      LoadBalancerArn:
+        Ref: WebAppLoadBalancer
+      Port: '80'
+      Protocol: HTTP
+
+  ALBListenerRule:
+      Type: AWS::ElasticLoadBalancingV2::ListenerRule
+      Properties:
+        Actions:
+        - Type: forward
+          TargetGroupArn: !Ref 'WebAppTargetGroup'
+        Conditions:
+        - Field: path-pattern
+          Values: [/]
+        ListenerArn: !Ref 'Listener'
+        Priority: 1
+
+  WebAppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 8
+      HealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 5
+      VpcId: !Ref VPC
+
+
+Outputs: 
+
+  VPC:
+    Description: A reference to the created VPC
+    Value: !Ref VPC
+    Export:
+      Name: !Sub ${EnvironmentName}-VPCID
+
+  PublicSubnet1:
+    Description: A reference to the public subnet in the Availability Zone
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub ${EnvironmentName}-PUB-SN1
+
+  # PrivateSubnets:
+  #     Description: A list of the private subnets
+  #     Value: !Join [ ",", [ !Ref PrivateSubnet1, !Ref PrivateSubnet2 ]]
+  #     Export:
+  #       Name: !Sub ${EnvironmentName}-PRIV-NETS
+
+  # PrivateSubnet1:
+  #     Description: A reference to the private subnet in the 1st Availability Zone
+  #     Value: !Ref PrivateSubnet1
+  #     Export:
+  #       Name: !Sub ${EnvironmentName}-PRI1-SN
+
+  # PrivateSubnet2: 
+  #     Description: A reference to the private subnet in the 2nd Availability Zone
+  #     Value: !Ref PrivateSubnet2
+  #     Export:
+  #       Name: !Sub ${EnvironmentName}-PRI2-SN
+
+  LoadBalancerDNSName:
+      Description: The DNS Name of the load balancer
+      Value: !Join [ "", [ "http://", !GetAtt WebAppLoadBalancer.DNSName ]]
+      Export:
+        Name: !Sub ${EnvironmentName}-LB-DNS
